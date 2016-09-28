@@ -22,8 +22,9 @@ import numpy as np
 import psr_utils
 import rfifind
 
-import psrfits
+#import psrfits
 #import filterbank # need to implement in PRESTO!
+import rawdata
 import spectra
 
 SWEEP_STYLES = ['r-', 'b-', 'g-', 'm-', 'c-']
@@ -47,15 +48,13 @@ def get_mask(rfimask, startsamp, N):
     mask = np.zeros((N, rfimask.nchan), dtype='bool')
     for blocknum in np.unique(blocknums):
         blockmask = np.zeros_like(mask[blocknums==blocknum])
-        chans_to_mask = rfimask.mask_zap_chans_per_int[blocknum]
-        if chans_to_mask:
-            blockmask[:,chans_to_mask] = True
+        blockmask[:,rfimask.mask_zap_chans_per_int[blocknum]] = True
         mask[blocknums==blocknum] = blockmask
     return mask.T
-        
+
 def maskfile(maskfn, data, start_bin, nbinsextra):
     rfimask = rfifind.rfifind(maskfn) 
-    mask = get_mask(rfimask, start_bin, nbinsextra)[::-1]
+    mask = get_mask(rfimask, start_bin, nbinsextra)
     masked_chans = mask.all(axis=1)
     # Mask data
     data = data.masked(mask, maskval='median-mid80')
@@ -66,7 +65,7 @@ def maskfile(maskfn, data, start_bin, nbinsextra):
 def waterfall(rawdatafile, start, duration, dm=None, nbins=None, nsub=None,\
               subdm=None, zerodm=False, downsamp=1, scaleindep=False,\
               width_bins=1, mask=False, maskfn=None, bandpass_corr=False, \
-              ref_freq=None):
+              ref_freq=None, scaledata=False):
     """
     Create a waterfall plot (i.e. dynamic specrum) from a raw data file.
     Inputs:
@@ -99,6 +98,9 @@ def waterfall(rawdatafile, start, duration, dm=None, nbins=None, nsub=None,\
                    will be corrected to account for change in
                    reference frequency. 
                    Default: Frequency of top channel.
+       ### Added 9.9.2016 ###
+       scaledata - Option whether to scale the data or not. Default: False
+       ### -------------- ###
     Outputs:
        data - Spectra instance of waterfalled data cube.
        nbinsextra - number of time bins read in from raw data. 
@@ -115,8 +117,10 @@ def waterfall(rawdatafile, start, duration, dm=None, nbins=None, nsub=None,\
 
     if nsub and dm:
         nchan_per_sub = rawdatafile.nchan/nsub
+#        top_ctrfreq = rawdatafile.freqs.max() - \
+#                      0.5*nchan_per_sub*rawdatafile.specinfo.df # center of top subband
         top_ctrfreq = rawdatafile.freqs.max() - \
-                      0.5*nchan_per_sub*rawdatafile.specinfo.df # center of top subband
+                      0.5*nchan_per_sub*rawdatafile.df # center of top subband
         start += 4.15e3 * np.abs(1./ref_freq**2 - 1./top_ctrfreq**2) * dm
 
     start_bin = np.round(start/rawdatafile.tsamp).astype('int')
@@ -131,10 +135,13 @@ def waterfall(rawdatafile, start, duration, dm=None, nbins=None, nsub=None,\
         nbinsextra = nbins    
 
     # If at end of observation
-    if (start_bin + nbinsextra) > rawdatafile.specinfo.N-1:
-        nbinsextra = rawdatafile.specinfo.N-1-start_bin
+#    if (start_bin + nbinsextra) > rawdatafile.specinfo.N-1:
+#        nbinsextra = rawdatafile.specinfo.N-1-start_bin
+    if (start_bin + nbinsextra) > rawdatafile.N-1:
+        nbinsextra = rawdatafile.N-1-start_bin
 
-    data = rawdatafile.get_spectra(start_bin, nbinsextra)
+    #Read in data
+    data = rawdatafile.get_spectra_raw(start_bin, start_bin+nbinsextra)
 
     # Masking
     if mask and maskfn:
@@ -159,7 +166,7 @@ def waterfall(rawdatafile, start, duration, dm=None, nbins=None, nsub=None,\
     data.data = data_masked
 
     if bandpass_corr:
-       data.data /= bandpass[:, None]
+        data.data /= bandpass[:, None]
 
     # Zerodm filtering
     if (zerodm == True):
@@ -177,8 +184,10 @@ def waterfall(rawdatafile, start, duration, dm=None, nbins=None, nsub=None,\
     # Downsample
     data.downsample(downsamp)
 
-    # scale data
-    data = data.scaled(scaleindep)
+    # scale data - added option (true/false)
+    if scaledata:
+        data = data.scaled(scaleindep)
+#    data = data.scaled(scaleindep)
     
     # Smooth
     if width_bins > 1:
@@ -280,11 +289,20 @@ def plot_waterfall(data, start, duration,
 def main():
     fn = args[0]
 
+    if (not fn.endswith(".fil")) and (not fn.endswith(".fits")):
+        raise ValueError("Cannot recognize data file type from "
+                         "extension. (Only '.fits' and '.fil' "
+                         "are supported.)")
+    else:
+        rawdatafile = rawdata.initialize_rawdata(fn)
+        print rawdatafile.datatype
+    '''
     if fn.endswith(".fil"):
         # Filterbank file
         filetype = "filterbank"
-        rawdatafile = filterbank.filterbank(fn)
-    if fn.endswith(".fits"):
+#        rawdatafile = filterbank.filterbank(fn)
+        rawdatafile = filterbank.FilterbankFile(fn)
+    elif fn.endswith(".fits"):
         # PSRFITS file
         filetype = "psrfits"
         rawdatafile = psrfits.PsrfitsFile(fn)
@@ -292,7 +310,7 @@ def main():
         raise ValueError("Cannot recognize data file type from "
                          "extension. (Only '.fits' and '.fil' "
                          "are supported.)")
-
+    '''
     data, bins, nbins, start = waterfall(rawdatafile, options.start, \
                             options.duration, dm=options.dm,\
                             nbins=options.nbins, nsub=options.nsub,\
@@ -301,7 +319,8 @@ def main():
                             scaleindep=options.scaleindep, \
                             width_bins=options.width_bins, mask=options.mask, \
                             maskfn=options.maskfile, \
-                            bandpass_corr=options.bandpass_corr)
+                            bandpass_corr=options.bandpass_corr, \
+                            scaledata=options.scaledata)
 
     plot_waterfall(data, start, options.duration, integrate_ts=options.integrate_ts, \
                    integrate_spec=options.integrate_spec, show_cb=options.show_cb, 
@@ -386,6 +405,8 @@ if __name__=='__main__':
                         help="The name of a valid matplotlib colour map." \
                                 "(Default: gist_yarg.)", \
                         default='gist_yarg')
+    parser.add_option('--scaledata', dest='scaledata', action='store_true', \
+                        help='Scale the data (Default: False)', default=False)
     options, args = parser.parse_args()
     
     if not hasattr(options, 'start'):

@@ -204,6 +204,8 @@ class PsrfitsFile(object):
 	return spectra.Spectra(freqs, self.tsamp, data, \
                                starttime=self.tsamp*startsamp, dm=0)
 
+    def get_spectra_raw(self, startsamp, endsamp):
+        return self.get_spectra(startsamp, (endsamp-startsamp))
 
 class SpectraInfo:
     def __init__(self, filenames):
@@ -232,7 +234,7 @@ class SpectraInfo:
                 raise ValueError("File '%s' does not appear to be PSRFITS!" % fn)
             
             # Open the PSRFITS file
-            hdus = pyfits.open(fn, mode='readonly', memmap=True)
+            hdus = pyfits.open(fn, mode='readonly')
             
             if ii==0:
                 self.hdu_names = [hdu.name for hdu in hdus]
@@ -564,7 +566,7 @@ def is_PSRFITS(filename):
     """Return True if filename appears to be PSRFITS format.
         Return False otherwise.
     """
-    hdus = pyfits.open(filename, mode='readonly', memmap=True)
+    hdus = pyfits.open(filename, mode='readonly')
     primary = hdus['PRIMARY'].header
 
     try:

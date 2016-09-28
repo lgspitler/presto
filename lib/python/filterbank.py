@@ -11,7 +11,7 @@ import os
 import os.path
 import numpy as np
 import sigproc
-
+import spectra
 
 DEBUG = False
 
@@ -87,9 +87,9 @@ def check_nbits(nbits):
         Output:
             None
     """
-    if nbits not in [32, 16, 8]:
+    if nbits not in [32, 16, 8, 1]:
         raise ValueError("'filterbank.py' only supports " \
-                                    "files with 8- or 16-bit " \
+                                    "files with 1- 8- or 16-bit " \
                                     "integers, or 32-bit floats " \
                                     "(nbits provided: %g)!" % nbits)
 
@@ -108,10 +108,23 @@ def get_dtype(nbits):
     check_nbits(nbits)
     if is_float(nbits):
         dtype = 'float%d' % nbits
+    elif nbits == 1:
+    #Force dtype to be unsigned 8 bit for reading from file
+        dtype = 'uint8'
     else:
         dtype = 'uint%d' % nbits
+    print "dtype is ", dtype
     return dtype
 
+def unpack_1bit(data):
+
+    unpacked=np.zeros(8*data.shape[0], dtype='uint8')
+
+    for ii in range(8):
+        unpacked[ii::8] = np.right_shift(np.bitwise_and(data, 2**ii), ii)
+
+    print "dtype unpacked ", unpacked.dtype
+    return unpacked
 
 def read_header(filename, verbose=False):
     """Read the header of a filterbank file, and return
@@ -151,10 +164,15 @@ class FilterbankFile(object):
             raise ValueError("ERROR: File does not exist!\n\t(%s)" % filfn)
         self.header, self.header_size = read_header(self.filename)
         self.frequencies = self.fch1 + self.foff*np.arange(self.nchans)
+        self.freqs=self.frequencies
         self.is_hifreq_first = (self.foff < 0)
         self.bytes_per_spectrum = self.nchans*self.nbits / 8
         data_size = os.path.getsize(self.filename)-self.header_size
         self.nspec = data_size/self.bytes_per_spectrum
+        #Aliases for rawdata compatibility
+        self.N = self.nspec
+        self.df = self.foff
+        self.nchan = self.nchans
        
         # Check if this file is a folded-filterbank file
         if 'npuls' in self.header and 'period' in self.header and \
@@ -199,12 +217,23 @@ class FilterbankFile(object):
         # Compute number of elements to read
         nspec = int(stop) - int(start)
         num_to_read = nspec*self.nchans
+        if self.nbits==1: num_to_read/=8
         num_to_read = max(0, num_to_read)
         self.filfile.seek(pos, os.SEEK_SET)
         spectra = np.fromfile(self.filfile, dtype=self.dtype, 
                               count=num_to_read)
+        if self.nbits == 1: 
+            spectra = unpack_1bit(spectra)
         spectra.shape = nspec, self.nchans 
         return spectra
+
+    def get_spectra_raw(self, start, stop):
+        '''Wrapper for get_spectra for waterfaller compatibility
+        '''
+        data = self.get_spectra(start, stop)
+
+        return spectra.Spectra(self.freqs, self.tsamp, data.transpose(), \
+            starttime=self.tsamp*start, dm=0)
 
     def append_spectra(self, spectra):
         """Append spectra to the file if is not read-only.
